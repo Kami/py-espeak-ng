@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*- 
+# -*- coding: utf-8 -*-
 
 #
 # Copyright 2017 Guenter Bartsch
@@ -20,38 +20,79 @@
 import logging
 import subprocess
 import tempfile
+import signal
+
+from ctypes import cdll
+
+
+PR_SET_PDEATHSIG = 1
+
+
+# This function is taken from StackStorm/st2 (ASF 2.0 license)
+def on_parent_exit(signame):
+    """
+    Return a function to be run in a child process which will trigger SIGNAME to be sent when the
+    parent process dies.
+
+    Based on https://gist.github.com/evansd/2346614
+    """
+    def noop():
+        pass
+
+    try:
+        libc = cdll['libc.so.6']
+    except OSError:
+        # libc, can't be found (e.g. running on non-Unix system), we cant ensure signal will be
+        # triggered
+        return noop
+
+    try:
+        prctl = libc.prctl
+    except AttributeError:
+        # Function not available
+        return noop
+
+    signum = getattr(signal, signame)
+
+    def set_parent_exit_signal():
+        # http://linux.die.net/man/2/prctl
+        result = prctl(PR_SET_PDEATHSIG, signum)
+        if result != 0:
+            raise Exception('prctl failed with error code %s' % result)
+    return set_parent_exit_signal
+
 
 class ESpeakNG(object):
 
-    def __init__(self, 
-                 volume      =         100, 
+    def __init__(self,
+                 volume      =         100,
                  audio_dev   =        None,
                  word_gap    =          -1, # ms
                  capitals    =           0, # indicate capital letters with: 1=sound, 2=the word "capitals", higher values indicate a pitch increase (try -k20).
                  line_length =           0, # Line length. If not zero, consider lines less than this length as end-of-clause
                  pitch       =          50, # 0-99
-                 speed       =         175, # approx. words per minute 
+                 speed       =         175, # approx. words per minute
                  voice       = 'english-us'):
 
 
-        self._volume      = volume  
-        self._audio_dev   = audio_dev  
-        self._word_gap    = word_gap   
-        self._capitals    = capitals   
+        self._volume      = volume
+        self._audio_dev   = audio_dev
+        self._word_gap    = word_gap
+        self._capitals    = capitals
         self._line_length = line_length
-        self._pitch       = pitch      
-        self._speed       = speed      
-        self._voice       = voice      
+        self._pitch       = pitch
+        self._speed       = speed
+        self._voice       = voice
 
     def _espeak_exe(self, args, sync=False):
-        cmd = ['espeak-ng', 
+        cmd = ['espeak-ng',
                '-a', str(self._volume),
-               '-k', str(self._capitals), 
-               '-l', str(self._line_length), 
-               '-p', str(self._pitch), 
-               '-s', str(self._speed), 
-               '-v', self._voice, 
-               '-b', '1', # UTF8 text encoding 
+               '-k', str(self._capitals),
+               '-l', str(self._line_length),
+               '-p', str(self._pitch),
+               '-s', str(self._speed),
+               '-v', self._voice,
+               '-b', '1', # UTF8 text encoding
                ]
 
         if self._word_gap>=0:
@@ -65,7 +106,8 @@ class ESpeakNG(object):
 
         p = subprocess.Popen(cmd,
                              stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT)
+                             stderr=subprocess.STDOUT,
+                             preexec_fn=on_parent_exit("SIGTERM"))
 
         res = iter(p.stdout.readline, b'')
         if not sync:
@@ -135,7 +177,7 @@ class ESpeakNG(object):
             args.append('--ipa=%s' % ipa)
         else:
             args.append('-x')
-        
+
         if tie:
             args.append('--tie=%s' % tie)
 
@@ -146,7 +188,7 @@ class ESpeakNG(object):
         for line in self._espeak_exe(args, sync=True):
 
             logging.debug(u'line: %s' % repr(line))
-            
+
             phonemes += line.decode('utf8').strip()
 
         return phonemes
@@ -199,7 +241,7 @@ class ESpeakNG(object):
 
     @property
     def audio_dev(self):
-        return self._audio_dev  
+        return self._audio_dev
     @audio_dev.setter
     def audio_dev(self, v):
         self._audio_dev   = v
